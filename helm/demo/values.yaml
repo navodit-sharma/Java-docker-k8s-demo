@@ -1,0 +1,44 @@
+replicaCount: 1
+image:
+  repository: registry.gitlab.com/navodit_sharma/devops-architect-demo
+  pullPolicy: IfNotPresent
+  tag: ""
+imagePullSecrets:
+  - name: gitlab-registry
+serviceAccount:
+  create: true
+service:
+  type: LoadBalancer
+  port: 80
+ports:
+  - name: http
+    containerPort: 8080
+    protocol: TCP
+ingress:
+  enabled: false
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+readinessProbe:
+  tcpSocket:
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+livenessProbe:
+  tcpSocket:
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+autoscaling:
+  enabled: false
+  # minReplicas: 1
+  # maxReplicas: 2
+  # targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+nodeSelector: {}
+tolerations: []
+affinity: {}

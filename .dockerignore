@@ -1,0 +1,11 @@
+.DS_Store
+.vscode
+helm
+src
+target
+!target/*.jar
+terraform
+.gitignore
+.gitlab-ci.yml
+pom.xml
+README.md

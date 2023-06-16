@@ -1,0 +1,133 @@
+image: docker:24-dind
+
+stages:
+  - build-app
+  - build-docker-image
+  - build-helm-chart
+  - deploy-staging
+  # - test-staging
+  - deploy-production
+  # - test-production
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_REGISTRY: registry.gitlab.com
+  DOCKER_REPOSITORY: navodit_sharma/devops-architect-demo
+  KUBE_CONTEXT: navodit_sharma/devops-architect-demo:dev-oola
+  KUBECTL_VERSION: 1.25.10
+
+build-app:
+  image: maven:3-jdk-8
+  stage: build-app
+  script: "mvn install"
+  artifacts:
+    when: always
+    expire_in: "1 week"
+    paths:
+      - target/*.jar
+      - target/surefire-reports/TEST-*.xml
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+
+build-docker:
+  image: docker:24.0.2-dind
+  stage: build-docker-image
+  services:
+    - docker:dind
+  script:
+    - echo "Building docker image - $DOCKER_REGISTRY/$DOCKER_REPOSITORY:$CI_COMMIT_REF_SLUG"
+    - docker build -t $DOCKER_REGISTRY/$DOCKER_REPOSITORY:$CI_COMMIT_REF_SLUG .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $DOCKER_REGISTRY/$DOCKER_REPOSITORY:$CI_COMMIT_REF_SLUG
+
+build-helm:
+  image:
+    name: alpine/helm:3.11.3
+    entrypoint: [""]
+  stage: build-helm-chart
+  script:
+    - helm version
+    - apk update && apk add yq
+    - yq -i ".image.tag = \"${CI_COMMIT_REF_SLUG}\"" helm/demo/values.yaml
+    - yq ".image.tag" helm/demo/values.yaml
+    - helm lint helm/demo
+    - helm package helm/demo --destination "target/helm"
+  artifacts:
+    when: on_success
+    expire_in: "1 week"
+    paths:
+      - target/helm/*.tgz
+
+deploy-staging:
+  image:
+    name: alpine/helm:3.11.3
+    entrypoint: [""]
+  stage: deploy-staging
+  script:
+    - echo $PATH
+    - |
+      curl -LO https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl --silent && \
+      chmod +x ./kubectl && \
+      mv -f ./kubectl /usr/local/bin/kubectl
+    - /usr/local/bin/kubectl config get-contexts
+    - /usr/local/bin/kubectl config use-context $KUBE_CONTEXT
+    - /usr/local/bin/kubectl cluster-info
+    - |
+      if kubectl get namespace demo-stag >/dev/null 2>&1; then
+        echo "Namespace exists"
+      else
+        echo "Creating namespace"
+        kubectl create namespace demo-stag
+      fi
+    - |
+      if kubectl --namespace demo-stag get secret gitlab-registry >/dev/null 2>&1; then
+        echo "Docker registry secret exists"
+      else
+        echo "Creating docker registry secret"
+        kubectl --namespace demo-stag create secret docker-registry gitlab-registry --docker-server=${DOCKER_REGISTRY} --docker-username=${CI_DEPLOY_USER} --docker-password=${CI_DEPLOY_PASSWORD}
+      fi
+    - helm upgrade --create-namespace --install --cleanup-on-fail --history-max 10 demo --namespace demo-stag target/helm/demo-*.tgz
+  environment:
+    name: staging
+
+# test-staging:
+#   stage: test-staging
+
+deploy-production:
+  image:
+    name: alpine/helm:3.11.3
+    entrypoint: [""]
+  stage: deploy-production
+  script:
+    - echo $PATH
+    - |
+      curl -LO https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl --silent && \
+      chmod +x ./kubectl && \
+      mv -f ./kubectl /usr/local/bin/kubectl
+    - /usr/local/bin/kubectl config get-contexts
+    - /usr/local/bin/kubectl config use-context $KUBE_CONTEXT
+    - /usr/local/bin/kubectl cluster-info
+    - |
+      if kubectl get namespace demo-prod >/dev/null 2>&1; then
+        echo "Namespace exists"
+      else
+        echo "Creating namespace"
+        kubectl create namespace demo-prod
+      fi
+    - |
+      if kubectl --namespace demo-prod get secret gitlab-registry >/dev/null 2>&1; then
+        echo "Docker registry secret exists"
+      else
+        echo "Creating docker registry secret"
+        kubectl --namespace demo-prod create secret docker-registry gitlab-registry --docker-server=${DOCKER_REGISTRY} --docker-username=${CI_DEPLOY_USER} --docker-password=${CI_DEPLOY_PASSWORD}
+      fi
+    - helm upgrade --create-namespace --install --cleanup-on-fail --history-max 10 demo --namespace demo-prod target/helm/demo-*.tgz
+  environment:
+    name: production
+  # when: manual # Triggered explicitely by user
+  rules:
+    - if: $CI_COMMIT_TAG != null
+      when: on_success
+
+# test-production:
+#   stage: test-production
